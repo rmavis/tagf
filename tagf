@@ -1,0 +1,256 @@
+#!/usr/bin/env ruby
+
+require 'fileutils'
+
+class TagFile
+  # TagFile.run :: [string] -> void
+  def self.run(args)
+    if (args.empty?)
+      $stderr.puts "tagf: Usage: tagf TAG PATH, tagf grep TAG"
+      exit
+    end
+
+    if (!self.can_store_in?(self.tag_tree_root))
+      $stderr.puts "tagf: Tag store '#{self.tag_tree_root}' must be a writable directory."
+      exit
+    end
+
+    if (args[0].downcase == 'grep')
+      if (args.length < 2)
+        $stderr.puts "tagf: Usage: tagf grep TAG"
+      else
+        self.run_grep(args.slice(1, (args.length - 1)))
+      end
+    else
+      if ((($stdin.tty?) && (args.length < 2)) ||
+          ((!$stdin.tty?) && (args.empty?)))
+        $stderr.puts "tagf: Usage: tagf TAG PATH"
+      else
+        self.run_tagging(args)
+      end
+    end
+  end
+
+  #
+  # Environment & configuration.
+  #
+
+  # TagFile.tag_tree_root :: void -> string
+  def self.tag_tree_root
+    "#{ENV['HOME']}/#{self.root_dir_name}"
+  end
+
+  # TagFile.root_dir_name :: void -> string
+  def self.root_dir_name
+    ".file-tags"
+  end
+
+  # TagFile.dir_tag_file_path :: path -> file
+  # path = (string) an absolute path to a directory
+  # file = (string) the tag file for that path
+  # dir_tag_file_name receives a path to a directory
+  def self.dir_tag_file_path(path)
+    "#{path}#{self.dir_tag_file_name}"
+  end
+
+  # TagFile.dir_tag_file_name :: void -> string
+  def self.dir_tag_file_name
+    ":tags"
+  end
+
+  # TagFile.conflicts_with :: string -> string?
+  def self.conflicts_with(path)
+    match_tag_file = Regexp.new("#{self.dir_tag_file_name}$")
+    if ((path.match(match_tag_file)) &&
+        (dir = path.sub(match_tag_file, '')) &&
+        (File.directory?(dir)))
+      return dir
+    end
+    return nil
+  end
+
+  #
+  # Tagging files.
+  #
+
+  # TagFile.run_tagging :: [string] -> void
+  def self.run_tagging(args = [ ])
+    acts = { }
+    has_file = false
+    action = lambda do |arg|
+      act = self.act_on_arg(arg.strip, acts)
+      has_file = true if act[0]
+      acts = act[1]
+    end
+
+    args.each { |arg| action.call(arg) }
+    if (!$stdin.tty?)
+      $stdin.each_line { |line| action.call(line) }
+    end
+
+    if (!has_file)
+      $stderr.puts "tagf: No files given."
+    end
+  end
+
+  # TagFile.act_on_arg :: (string, acts) -> [bool, acts]
+  # acts = {:symbol => string, ...}
+  # act_on_arg modifies its `acts` argument in place.
+  def self.act_on_arg(arg, acts = { })
+    is_file = false
+    if (File.exist?(arg))
+      is_file = true
+      if (acts.empty?)
+        $stderr.puts "tagf: Skipping '#{arg}': no tags given."
+      else
+        self.tag_file(File.realpath(arg), acts)
+      end
+    elsif (parts = arg.match(/^([-+])?(.+)$/))
+      acts[parts[2]] = (parts[1] == '-') ? :remove : :add
+    else
+      # Could this even be?
+      $stderr.puts "tagf: Skipping argument '#{arg}': it is not a path nor a tag."
+    end
+    return [is_file, acts]
+  end
+
+  # TagFile.tag_file :: (path, acts) -> bool?
+  # path = (string) an absolute path
+  # acts = see `act_on_arg`
+  def self.tag_file(path, acts)
+    if (File.directory?(path))
+      path = self.dir_tag_file_path(path)
+    elsif ((dir = self.conflicts_with(path)) &&
+           (dir.is_a?(String)))
+      $stderr.puts "tagf: Skipping file '#{path}': its name conflicts with the name reserved for tagging the directory '#{dir}'."
+      return nil
+    end
+
+    # `path` will have a leading `/`
+    tag_file = self.tag_tree_root << path
+    tags = self.tags_for_file(tag_file, acts)
+    if (tags.nil?)
+      return nil
+    end
+    begin
+      tag_string = tags.join("\n")
+      return (File.write(tag_file, tag_string) == tag_string.length)
+    rescue
+      $stderr.puts "tagf: Unable to write to tag store file '#{tag_file}'."
+      return nil
+    end
+  end
+
+  # TagFile.tags_for_file :: path -> [string]?
+  # path = (string) the absolute path of the tag store file
+  def self.tags_for_file(path, acts)
+    if (File.exist?(path))
+      if (File.readable?(path))
+        return self.filter_tags!(
+                 File::read(path).split("\n").keep_if { |tag| !tag.strip.empty? },
+                 acts
+               )
+      end
+      $stderr.puts "tagf: Store file '#{path}' is unreadable."
+      return nil
+    end
+
+    dir = File.dirname(path)
+    if (!self.can_store_in?(dir))
+      $stderr.puts "tagf: Store directory '#{dir}' is not writable."
+      return nil
+    end
+    return self.collect_tags(acts)
+  end
+
+  # TagFile.filter_tags :: ([string], acts) -> [string]
+  # acts = see `tag_file`
+  # filter_tags modifies the array it's given in place.
+  def self.filter_tags!(tags, acts)
+    acts.each do |tag, act|
+      if ((act == :remove) &&
+          (tags.include?(tag)))
+        tags.delete(tag)
+      elsif ((act == :add) &&
+             (!tags.include?(tag)))
+        tags.push(tag)
+      end
+    end
+    return tags
+  end
+
+  # TagFile.collect_tags :: acts -> [string]
+  # acts = see `tag_file`
+  def self.collect_tags(acts)
+    tags = [ ]
+    acts.each do |tag, act|
+      if (act == :add)
+        tags.push(tag)
+      end
+    end
+    return tags
+  end
+
+  # TagFile.can_store_in? :: path -> bool
+  # path = (string) an absolute path to a directory
+  def self.can_store_in?(path)
+    if (File.exist?(path))
+      return ((File.directory?(path)) &&
+              (File.writable?(path)))
+    end
+
+    begin
+      return (FileUtils.mkdir_p(path) == [path])
+    rescue
+      return false
+    end
+  end
+
+  #
+  # Grepping for tags.
+  #
+
+  # TagFile.run_grep :: [string] -> void
+  # run_grep prints matching file paths to stdout
+  def self.run_grep(tags)
+    match_root = Regexp.new("^#{self.tag_tree_root}")
+    match_file = Regexp.new("\/[^\/]+#{self.dir_tag_file_name}$")
+    `#{self.grep_command(tags)}`.split("\n").each do |line|
+      line = line.sub(match_root, '')
+      # This check is needed for files ending with the
+      # `self.dir_tag_file_name` extension that are not named after
+      # the directory they're in.
+      if ((line.match(match_file)) &&
+          (dir = line.sub(self.dir_tag_file_name, '')) &&
+          (File.directory?(dir)))
+        $stdout.puts dir
+      else
+        $stdout.puts line
+      end
+    end
+  end
+
+  # TagFile.grep_command :: [string] -> string
+  # grep_command returns a command line that calls `grep` and `xargs`
+  # grep options:
+  #   -r = recursive
+  #   -i = case-insensitive
+  #   -l = limit printing to the name of the file only (no match data)
+  #   -x = match the tag (line) exactly
+  def self.grep_command(tags)
+    first_line = "grep -rilx \"#{tags[0]}\" #{self.tag_tree_root}"
+
+    if (tags.length == 1)
+      return first_line
+    end
+
+    parts = [ ]
+    parts.push(first_line)
+    tags.slice(1, (tags.length - 1)).each do |tag|
+      parts.push("xargs -d \"\\n\" grep -ilx \"#{tag}\"")
+    end
+    return parts.join(" | ")
+  end
+end
+
+TagFile.run(ARGV)
