@@ -11,11 +11,24 @@
 
 `tagf` is a simple tool that enables associating tags with arbitrary files and directories. It also enables searching those tags.
 
-Tags are stored in plain text files, one tag per line. The name of the tags file is identical to the tagged file, but in a directory named `.file-tags` in the user's home directory. For example, the tag file for `/home/user/music/song.mp3` will be `/home/user/.file-tags/home/user/music/song.mp3`. Directories are similar: the tag file for `/home/user/music` will be `/home/user/.file-tags/home/user/music:tags`.
+Tags are stored in plain text files, one tag per line. The name of the tags file is identical to that of the the tagged file, but in a directory named `~/.file-tags`. For example, the tag file for `/home/user/music/song.mp3` will be `/home/user/.file-tags/home/user/music/song.mp3`. Directories are similar: the tag file for `/home/user/music` will be `/home/user/.file-tags/home/user/music:tags`.
+
+## Dependencies
+
+- ruby
+- grep
+- xargs
+
+## Installation
+
+0. Clone the repository: https://github.com/rmavis/tagf.
+1. Move the executable `tagf` (or make a symlink to it) somewhere in your $PATH.
+2. Ensure the executable is executable (`chmod` it 744, etc).
+3. There is no step 3.
 
 ## Usage
 
-To add tags to files run something like:
+To add tags to files, the pattern is:
 
     $ tagf TAG[ TAG2]... FILE[ FILE2]...
 
@@ -25,11 +38,13 @@ Tags must be specified before files. All tags will be applied to all files follo
 
 will tag `file1` with "ok" and `file2` with "ok" and "great".
 
-By default, the given tags will be added to the given entries. Tags will not be duplicated. To make the addition explicit, you can prefix tags with a `+`. To remove a tag, prefix it with a `-`, like so:
+By default, the given tags will be added to the given files. Tags will not be duplicated. To make the addition explicit, you can prefix tags with a `+`.
 
-    $ tagf -ok file2
+To remove a tag, prefix it with a `-`, like so:
 
-Thus, `tagf` only has two operations: adding and removing tags, and searching those tags. The special form for searching is:
+    $ tagf -great file2
+
+Thus, `tagf` has only two operations: adding and removing tags, and searching those tags. The form for searching is:
 
     $ tagf grep TAG[ TAG2]...
 
@@ -58,5 +73,5 @@ Make a playlist of good music:
 
 Look at some art:
 
-    $ tagf art *okeefe* *kandinsky*
+    $ tagf art ~/pictures/*okeefe* ~/pictures/*kandinsky*
     $ tagf grep art | sxiv -
